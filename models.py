@@ -1,6 +1,5 @@
 '''
-Aqui vamos a poner 
-todo lo necesario para hacer fincionet RF a ppartir de competition 2
+Groupe all models and functions to acompain trainig and results analysis. 
 '''
 import time
 from datetime import datetime
@@ -13,21 +12,23 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 import torch.optim.lr_scheduler as lr_scheduler
+import torch.optim as optim
 
 from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn import metrics 
 from sklearn.metrics import roc_auc_score,accuracy_score
 from sklearn.multiclass import OneVsRestClassifier
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
-from sklearn.neural_network import MLPClassifier
-from sklearn.exceptions import ConvergenceWarning
-from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import confusion_matrix
 import seaborn as sns
 
-from joblib.externals.loky.backend.context import get_context
+# from joblib.externals.loky.backend.context import get_context
+from hydra.utils import instantiate
+from omegaconf import DictConfig,OmegaConf
 
 import myServices as ms
+
+#### main classes
 
 class implementRandomForestCalssifier():
     '''
@@ -154,204 +155,8 @@ class implementRandomForestRegressor():
         bestParameters = self.rfr_WithGridSearch.best_params_
         print(f"The best parameters: {bestParameters}")
         return best_estimator, bestParameters
-     
-class implementingMLPCalssifierOneHLayer():
-    def __init__(self, trainingSet, targetCol, params):
-        '''
-        @MLPClassifier >> default parameters: MLPClassifier(hidden_layer_sizes=(100,), activation=['relu'/ 'logistic’], *, solver='adam', alpha=0.0001,
-        batch_size='auto',learning_rate='constant'({‘constant’, ‘invscaling’, ‘adaptive’}, learning_rate_init=0.001, default=’constant’)
-        power_t=0.5, max_iter=200, shuffle=True, random_state=None, tol=0.0001, verbose=False, warm_start=False, momentum=0.9, nesterovs_momentum=True, 
-        early_stopping=False, validation_fraction=0.1, beta_1=0.9, beta_2=0.999, epsilon=1e-08, n_iter_no_change=10, max_fun=15000)[source]
-        '''
-        self.params = params
-        self.logsDic = {}
-        self.x_train, self.y_train= ms.importDataSet(trainingSet, targetCol)
-        self.mlpClassifier = MLPClassifier(**self.params)
-        ### Report ###
-        self.scoreRecord = self.newScoreRecordDF(self)
-        print(self.x_train.head())
-        print("Train balance")
-        print(listClassCountPercent(self.y_train))
 
-    def fitMLPClassifier(self):
-        #  with warnings.catch_warnings():
-        #     warnings.filterwarnings(
-        #         "ignore", category=ConvergenceWarning, module="sklearn"
-        #     )
-        y_train = self.y_train.copy()
-        x_trains = self.x_train.copy()
-        self.mlpClassifier.fit(x_trains.values,y_train.values)
-        self.logMLPClassifier(self)
-        return 
- 
-    def explore4BestHLSize(self,X_val,Y_val,firstInterval,classOfInterest,loops):
-        '''
-        This function implements a cyclic exploration to find the best hidden layer size   
-        ''' 
-        print('firstInterval_____:', firstInterval)
-        def helperTrain(i):
-            self.params['hidden_layer_sizes']=int(i)
-            self.restartMLPCalssifier(self,self.params)
-            self.fitMLPClassifier(self)
-            y_hat = self.mlpClassifier.predict(X_val.values)
-            ROC_AUC_calculation = roc_auc_score_calculation(Y_val,y_hat)
-            scoreList = []
-            keysROC = list(ROC_AUC_calculation.keys())
-            keysROC.sort()
-            for k in keysROC:
-                scoreList.append(ROC_AUC_calculation[k])
-            scoreList.append(i)
-            self.scoreRecord.loc[len(self.scoreRecord)]= scoreList
-            hypParam, bestScore = self.getHyperParamOfBestClassScoreRecorded(self,classOfInterest)
-            print('ROC_AUC___ HiperParam: ', scoreList)
-            # print(scoreList)
-            print("current center__: ",hypParam, ' corrent best score__:', bestScore)
-            return hypParam
-        
-        def iters(loops,firstInterval):
-            '''
-            function@: A function that returns as last element an integer, 
-            corresponding to the center of next intervale to explore or the optimal value from the last iteration.  
-            '''
-            print("Loops to go >>>",loops)
-            if loops>1:
-                loops-=1
-                for i in firstInterval:
-                    center = helperTrain(i)
-                interval = buildInterval(loops,center)
-                print("loop____",loops ,' newInterval____: ', interval)
-                iters(loops,interval)
-            else:
-                for j in firstInterval:
-                    center = helperTrain(j)
-            print('Final loop')
-            return center 
-        bestSize:int
-        bestSize = iters(loops,firstInterval)
-        print(self.scoreRecord)
-        return bestSize 
-
-    def logMLPClassifier(self,newFeatureDic = {}):
-        '''
-        @newFeatureDic : is a dictionary of features to add
-        '''
-        self.logsDic['optimizer'] = self.mlpClassifier._optimizer
-        self.logsDic['activation'] = self.mlpClassifier.activation
-        self.logsDic['hidden_layer_sizes'] = self.mlpClassifier.hidden_layer_sizes
-        self.logsDic['n_iter'] = self.mlpClassifier.n_iter_
-        self.logsDic['lossCurve'] = self.mlpClassifier.loss_curve_
-        for k in newFeatureDic.keys():
-            self.logsDic[k] = newFeatureDic[k]
-     
-    def plotLossBehaviour(self):
-        lossList = self.mlpClassifier.loss_curve_
-        epochs = np.arange(1,self.mlpClassifier.n_iter_+1)
-        plt.rcParams.update({'font.size': 14})
-        plt.ylabel('Loss', fontsize=16)
-        plt.xlabel('Iterations', fontsize=16)
-        plt.plot(epochs,lossList)
-    
-    def newScoreRecordDF(self):
-        recordDF = pd.DataFrame()
-        classList = (self.y_train.unique()).tolist()
-        classList.sort()
-        if len(classList)<=2:
-            recordDF['Metric'] = pd.Series(dtype=float)
-        else: 
-            for i in classList:
-                className = 'class_'+str(i)
-                recordDF[className] = pd.Series(dtype=float)
-        recordDF['hyperParam'] = pd.Series(dtype='int16')
-        print('New Score recorder ready: ', recordDF)
-        return recordDF
-    
-    def getHyperParamOfBestClassScoreRecorded(self,classOfInterest):
-        bestScore = self.scoreRecord[classOfInterest].max()
-        newCenter = self.scoreRecord.loc[self.scoreRecord[classOfInterest].idxmax(),'hyperParam']
-        return newCenter, bestScore
-
-    def restartMLPCalssifier(self, params):
-        self.mlpClassifier = MLPClassifier(**params)
-
-    def getMLPClassifier(self):
-        return self.mlpClassifier
-
-    def get_logsDic(self):
-        return self.logsDic
-
-class implementingMLPCalssifier():
-    def __init__(self, trainingSet, targetCol, params):
-        '''
-        @MLPClassifier >> default parameters: MLPClassifier(hidden_layer_sizes=(100,), activation=['relu'/ 'logistic’], *, solver='adam', alpha=0.0001,
-        batch_size='auto',learning_rate='constant'({‘constant’, ‘invscaling’, ‘adaptive’}, learning_rate_init=0.001, default=’constant’)
-        power_t=0.5, max_iter=200, shuffle=True, random_state=None, tol=0.0001, verbose=False, warm_start=False, momentum=0.9, nesterovs_momentum=True, 
-        early_stopping=False, validation_fraction=0.1, beta_1=0.9, beta_2=0.999, epsilon=1e-08, n_iter_no_change=10, max_fun=15000)[source]
-        '''
-        self.params = params
-        self.logsDic = {}
-        self.x_train, self.y_train= ms.importDataSet(trainingSet, targetCol)
-        self.mlpClassifier = MLPClassifier(**self.params)
-        ### Report ###
-        self.scoreRecord = self.newScoreRecordDF(self)
-        print(self.x_train.head())
-        print("Train balance")
-        print(listClassCountPercent(self.y_train))
-
-    def fitMLPClassifier(self):
-        #  with warnings.catch_warnings():
-        #     warnings.filterwarnings(
-        #         "ignore", category=ConvergenceWarning, module="sklearn"
-        #     )
-        y_train = self.y_train.copy()
-        x_trains = self.x_train.copy()
-        self.mlpClassifier.fit(x_trains.values,y_train.values)
-        self.logMLPClassifier(self)
-        return 
- 
-    def logMLPClassifier(self):
-        self.logsDic['optimizer'] = self.mlpClassifier._optimizer
-        self.logsDic['activation'] = self.mlpClassifier.activation
-        self.logsDic['hidden_layer_sizes'] = self.mlpClassifier.hidden_layer_sizes
-        self.logsDic['n_iter'] = self.mlpClassifier.n_iter_
-        self.logsDic['lossCurve'] = self.mlpClassifier.loss_curve_
-        
-    def plotLossBehaviour(self):
-        lossList = self.mlpClassifier.loss_curve_
-        epochs = np.arange(1,self.mlpClassifier.n_iter_+1)
-        plt.rcParams.update({'font.size': 14})
-        plt.ylabel('Loss', fontsize=16)
-        plt.xlabel('Iterations', fontsize=16)
-        plt.plot(epochs,lossList)
-    
-    def newScoreRecordDF(self):
-        recordDF = pd.DataFrame()
-        classList = (self.y_train.unique()).tolist()
-        classList.sort()
-        if len(classList)<=2:
-            recordDF['Metric'] = pd.Series(dtype=float)
-        else: 
-            for i in classList:
-                className = 'class_'+str(i)
-                recordDF[className] = pd.Series(dtype=float)
-        recordDF['hyperParam'] = pd.Series(dtype='int16')
-        print('New Score recorder ready: ', recordDF)
-        return recordDF
-    
-    def getHyperParamOfBestClassScoreRecorded(self,classOfInterest):
-        bestScore = self.scoreRecord[classOfInterest].max()
-        newCenter = self.scoreRecord.loc[self.scoreRecord[classOfInterest].idxmax(),'hyperParam']
-        return newCenter, bestScore
-
-    def restartMLPCalssifier(self, params):
-        self.mlpClassifier = MLPClassifier(**params)
-
-    def getMLPClassifier(self):
-        return self.mlpClassifier
-
-    def get_logsDic(self):
-        return self.logsDic
-
-class MLPModelTrainCycle:
+class ModelTrainCycle():
     def __init__(self,
                  model,
                  modelName,
@@ -360,7 +165,7 @@ class MLPModelTrainCycle:
                  labels,
                  pathTrainingDSet,
                  trainingParams, 
-                 pathValidationDSet = None,
+                 pathTestDSet = None,
                  scheduler = None, 
                  initWeightfunc= None, 
                  initWeightParams= None, 
@@ -368,12 +173,24 @@ class MLPModelTrainCycle:
                  logger:ms.logg_Manager = None,
                  nWorkers = None):
         
+        ### Create bases fro training
         self.train_dataset_path = pathTrainingDSet
-        self.validation_dataset_path = pathValidationDSet
+        self.test_dataset_path = pathTestDSet
         self.model = model
         self.modelName = modelName
         self.logger = logger
-        
+
+        ### Define tracking performance on evaluation Dataset.
+        self.trackEval = False ## Default
+        self.evaluationLosses = []
+        self.evalInBathches = trainingParams.evalInBathches
+        if 'evalDatasetPath' in trainingParams.keys():
+            self.trackEval = True
+            self.evalDatasetPath = trainingParams.evalDatasetPath
+            logger.update_logs({'tracking evaluation performance on dataset': self.evalDatasetPath})
+            print(f"Self.evalInBathches value == {self.evalInBathches}")
+
+        ## Defining device    
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f' The device : {self.device}')
         self.NoCoordinates = removeCoordinates
@@ -382,11 +199,11 @@ class MLPModelTrainCycle:
 
         ### Load Dataset
         # Read Labels names
-        self.logger.update_logs({'Data Set': self.train_dataset_path})
+        self.logger.update_logs({'Training Set': self.train_dataset_path})
         self.labels = labels
-        ## Load Training Dataset
+        ## Loading Training Dataset
         self.X, self.Y = self.load_Dataset(self.labels, self.train_dataset_path)
-        
+
         ## Setting Parameters
         self.epochs = trainingParams['epochs']
         self.logger.update_logs({'Epochs': self.epochs})
@@ -395,6 +212,7 @@ class MLPModelTrainCycle:
         self.batchSize = trainingParams['batchSize']
         self.logger.update_logs({'Batch Size': self.batchSize})
         self.saveModelFolder = trainingParams['modelsFolder']
+        self.logger.update_logs({'Model saved to ':self.saveModelFolder})
         self.criterion = loss_fn()
         self.initWeightParams = initWeightParams
         self.initWeightFunc = initWeightfunc  
@@ -409,12 +227,23 @@ class MLPModelTrainCycle:
             self.scheduler = scheduler
             self.schedulerInitialState = scheduler
         
-        ## Define training values
-        self.presetting_Training(self.X)
+        # Define Models's hidden layer sizes
+        input_size = self.X.shape[1]
+        self.model = self.model(input_size)
+       
+        ### Define Optimizer and scheduler
+        self.optimizer  = self.optimizer(self.model.parameters())
+        if self.scheduler is not None:
+            self.scheduler = self.scheduler(self.optimizer)
+            self.Sched = True    
+        
+        ### Init model parameters.
+        if self.initWeightFunc  is not None:
+                init_params(self.model, self.initWeightFunc, *self.initWeightParams) 
         self.trainLosses = []
         self.valLosses = []
 
-    def splitData_asTensor(self,X,Y):
+    def splitData_asTensor(self,X,Y)-> tuple[torch.tensor,torch.tensor,torch.tensor,torch.tensor]:
         # Split the data into training and test sets
         X_train, X_test, y_train, y_test = train_test_split(X.values, Y.values, test_size= self.splitProportion, random_state=42)
         printDataBalace(X_train, X_test, y_train, y_test)
@@ -427,47 +256,41 @@ class MLPModelTrainCycle:
             X, Y = ms.importDataSet(dataset, labels)
         return X, Y
 
-    def read_split_as_tensor(self, X_train,y_train,X_test,y_test):
+    def read_split_as_tensor(self, X_train,y_train,X_test,y_test)-> tuple[torch.tensor,torch.tensor,torch.tensor,torch.tensor]:
         return torch.tensor(X_train.values, dtype=torch.float), torch.tensor(X_test.values, dtype=torch.float), torch.tensor(y_train.values, dtype=torch.float), torch.tensor(y_test.values, dtype=torch.float)
-        
-    def presetting_Training(self,X_train):
-        '''
-        Place the necesary information together to set the training.
-        '''
-        input_size = X_train.shape[1]
-        # Define Models's hidden layer sizes
-        self.model = self.model(input_size)
-        ### Define Optimizer and scheduler
-        self.optimizer  = self.optimizer(self.model.parameters())
-        if self.scheduler is not None:
-            self.scheduler = self.scheduler(self.optimizer)
-            self.Sched = True    
-        ### Init model parameters.
-        if self.initWeightFunc  is not None:
-                init_params(self.model, self.initWeightFunc, *self.initWeightParams) 
-        pass
-
+      
     def modelTrainer(self):
-        self.logger.update_logs({'training Mode': 'Single train'})
-        if self.validation_dataset_path is None:
-            X_train, X_test, y_train, y_test = self.splitData_asTensor(self.X,self.Y)
+        if self.test_dataset_path is None:
+            self.X_train, self.X_test, self.y_train, self.y_test = self.splitData_asTensor(self.X,self.Y)
         else:
-            X_val, y_val = self.load_Dataset(self.labels,self.validation_dataset_path)
-            X_train,X_test,y_train,y_test = self.read_split_as_tensor(self.X,self.Y,X_val, y_val)
-            self.logger.update_logs({'Testing on Validation Dataset': self.validation_dataset_path})
+            X_test, y_test = self.load_Dataset(self.labels,self.test_dataset_path)
+            self.X_train, self.X_test, self.y_train, self.y_test = self.read_split_as_tensor(self.X,self.Y,X_test,y_test)
+            self.logger.update_logs({'Test Dataset': self.test_dataset_path})
+        if self.trackEval:
+            X_eval,y_eval = self.load_Dataset(self.labels,self.evalDatasetPath)
+            self.X_Eval, self.y_Eval = torch.tensor(X_eval.values, dtype=torch.float),torch.tensor(y_eval.values, dtype=torch.float)
+            evaluation_data = TensorDataset(self.X_Eval,self.y_Eval)
+            self.evaluation_DataLoader = DataLoader(evaluation_data, batch_size=self.batchSize,shuffle=False, drop_last=False)
+        
         # Convert the training set into torch tensors
-        self.model, trainMetrics =  self.train(X_train,X_test,y_train, y_test)
+        self.model, trainMetrics =  self.train(self.X_train, self.X_test, self.y_train, self.y_test)
         modelName = str(self.modelName +'.pkl')
         model_Path = self.saveModelFolder + modelName
-        self.logger.update_logs({'model Name': modelName})
-        self.logger.update_logs({'Test metric': trainMetrics})
+        self.logger.update_logs({'model saved as': modelName})
         ms.saveModel(self.model,model_Path)
         return self.model, trainMetrics
 
-    def train(self, X_train,X_test, y_train, y_test)->[nn.Sequential,dict]:
+    def train(self, X_train,X_test, y_train, y_test)->tuple[nn.Sequential,dict]:
+        ### Set loaders
+        # Training
         train_data = TensorDataset(X_train, y_train)
-        train_loader = DataLoader(train_data, batch_size=self.batchSize, 
+        self.train_loader = DataLoader(train_data, batch_size=self.batchSize, 
                                   num_workers = self.nWorkers, shuffle=True)
+        # test
+        test_data = TensorDataset(X_test, y_test)
+        self.test_loader = DataLoader(test_data, batch_size=self.batchSize, 
+                                  num_workers = self.nWorkers, shuffle=False, drop_last=False)
+        
         # Train the model
         startTime = datetime.now()
         self.model.to(self.device)
@@ -477,8 +300,9 @@ class MLPModelTrainCycle:
         for e in range(1,self.epochs):
             loopLoss = []
             valLoss = []
+            evalLoss = []
             self.model.train()
-            for inputs, labels in train_loader:
+            for inputs, labels in self.train_loader:
                 inputs = inputs.to(self.device)
                 labels = labels.to(self.device)
                 self.optimizer.zero_grad()
@@ -488,97 +312,133 @@ class MLPModelTrainCycle:
                 self.optimizer.step()
                 loopLoss.append(loss.item())
             self.trainLosses.append(np.mean(loopLoss))
-            threshold = 0.5
-            ## Evaluate in the test Set:
-            with torch.no_grad():
-                self.model.eval()
-                inputs, labels = X_test.to(self.device), y_test.to(self.device)
-                output = self.model(inputs)
-                valLoss = self.criterion(output,labels.unsqueeze(1))
-                self.valLosses.append(valLoss.item())
-                y_hat = (output > threshold).float()
-                accScore, macro_averaged_f1, micro_averaged_f1  = computeClassificationMetrics(y_test.cpu(),y_hat.cpu())
             
-            if e%10 ==0:  ## Report every 10 epochs
+            ### Compute losses and metrics in the validation Set:
+            # Run model on test dataset
+            probas,y_hat_test = self.evaluate(X=self.X_test,dataLoader=self.test_loader)
+            valLoss = self.criterion(probas,y_test.to(self.device)) # .unsqueeze(1)
+            self.valLosses.append(valLoss.item())
+                        
+            # Run model on Evaluation dataset if required
+            if self.trackEval: 
+                _,y_hat_Eval = self.evaluate(X=self.X_Eval,dataLoader=self.evaluation_DataLoader)
+                evalLoss = self.criterion(y_hat_Eval.to(self.device),self.y_Eval.to(self.device)) # .unsqueeze(1)
+                self.evaluationLosses.append(evalLoss.item())
+                           
+            ### Report every 5 epochs
+            if e%5 ==0: 
+                ## Log epoch number
+                self.logger.update_logs({'<---------Epoch ------->': e })  
+                # Compute remining time.
                 elapsed_time = datetime.now() - startTime
                 avg_time_per_epoch = elapsed_time.total_seconds() / e
                 remaining_epochs = self.epochs - e
                 estimated_time = remaining_epochs * avg_time_per_epoch
                 print(f"Elapsed Time after {e} epochs : {elapsed_time} ->> Estimated Time to End: {ms.seconds_to_datetime(estimated_time)}",' ->actual loss %.4f' %(self.trainLosses[-1]), '-> actual lr = %.8f' %(actual_lr))
-                print('            Test metrics: accScore: %.4f '%(accScore), 'macro_averaged_f1 : %.4f'%(macro_averaged_f1), 'micro_averaged_f1: %.4f' %(micro_averaged_f1))
+                
+                ## Report test metric
+                probas,y_hat_test = self.evaluate(X=self.X_test,dataLoader=self.test_loader)
+                self.logger.update_logs({'Test metric': computeClassificationMetrics(y_test.cpu(),y_hat_test.cpu())})             
+                if self.trackEval:
+                    ## Report evaluation metrics. 
+                    _,y_hat_Eval = self.evaluate(X=self.X_Eval,dataLoader=self.evaluation_DataLoader)
+                    self.logger.update_logs({'Evaluation metrics': computeClassificationMetrics(self.y_Eval.cpu(),y_hat_Eval.cpu())}) 
+                    
+            ### Do schedule step.         
             if self.Sched:   
                 self.scheduler.step(loss.item())
                 actual_lr = self.optimizer.param_groups[0]["lr"]      
+
+        ###  Log the final metrics
+        probas,y_hat_test = self.evaluate(X=self.X_test,dataLoader=self.test_loader) 
+        self.logger.update_logs({'Final test metric':computeClassificationMetrics(y_test.cpu(),y_hat_test.cpu())})
+        if self.trackEval:
+            _,y_hat_Eval = self.evaluate(X=self.X_Eval,dataLoader=self.evaluation_DataLoader)
+            self.logger.update_logs({'Final Evaluation metric': computeClassificationMetrics(self.y_Eval.cpu(),y_hat_Eval.cpu())})
         
-        ###  Return the final metrics
-        metrics = {'accScore':accScore, 'macro_averaged_f1' : macro_averaged_f1, 
-                'micro_averaged_f1' : micro_averaged_f1}
-        print('Final train metrics: accScore: %.4f '%(accScore), 'macro_averaged_f1 : %.4f'%(macro_averaged_f1), 'micro_averaged_f1: %.4f' %(micro_averaged_f1))
-        # self.logMLP()
-        self.logger.update_logs({'Last train metric': metrics})
         return self.model, metrics 
 
-    def evaluateModel(self, model = None)-> (np.array,np.array,dict):
-        threshold = 0.5
-        X,Y= self.load_Dataset(self.labels,self.validation_dataset_path)
-        # print(f"x val shape = {X.values.shape}")
-        # print(f"Y val shape = {Y.values.shape}")
+    def evaluate(self,X=None,dataLoader=None, threshold:float=0.5):
+        '''
+        @X: Features in row format.
+        @Y: Labels column vector.
+        @dataLoader: Dataloader with the desired dataset to be evaluated in batches. 
+        @threshold: Threshold to apply when converting probablilities to binary mask. 
+        @Return :  probas,y_hat,metrics (F1-macro-score, F1-micro-score)
+        '''
+        if self.evalInBathches:
+            return self.evaluateModelInBatches(dataLoader,threshold)
+        else:
+            return self.evaluateModel(X,threshold)
 
-        X_val,Y_val = torch.tensor(X.values, dtype=torch.float),torch.tensor(Y.values, dtype=torch.float)
-        
-        if model is None:
-            valModel = self.model
-        else: 
-            valModel = model
+    def evaluateModel(self,X,threshold:float=0.5)-> tuple[np.array,np.array,dict]:
+        '''
+        @X: Features in row format.
+        @Y: Labels column vector.
+        @threshold: Threshold to apply when converting probablilities to binary mask. 
+        @Return :  probas, y_hat, metrics (F1-macro-score, F1-micro-score)
+        '''
         with torch.no_grad():
-            valModel.eval().to(self.device)
-            inputs, labels = X_val.to(self.device), Y_val.to(self.device)
-            output = valModel(inputs)
-            y_hat = (output > threshold).float()
-            accScore, macro_averaged_f1, micro_averaged_f1  = computeClassificationMetrics(Y_val.cpu(),y_hat.cpu())
-            metrics = {'accScore':accScore, 'macro_averaged_f1' : macro_averaged_f1, 
-                'micro_averaged_f1' : micro_averaged_f1}
-            self.logger.update_logs({'Validation metric': metrics})
-        return Y_val,y_hat,metrics
+            self.model.eval()
+            inputs = X.to(self.device)
+            probas = self.model(inputs)
+            y_hat = (probas > threshold).float()
+        return probas,y_hat
+
+    def evaluateModelInBatches(self,data_loader,threshold:float=0.5)-> tuple[np.array,np.array,dict]:      
+        '''
+        @X: Features in row format.
+        @Y: Labels column vector.
+        @threshold: Threshold to apply when converting probablilities to binary mask. 
+        @Return : probas, y_hat, metrics (F1-macro-score, F1-micro-score)
+        '''
+        with torch.no_grad():
+            probs = torch.tensor([]).to(self.device)
+            self.model.eval().to(self.device)
+            for inputs, _ in data_loader:
+                inputs = inputs.to(self.device)
+                log_probs = self.model(inputs)
+                probs = torch.cat((probs,log_probs.squeeze()))                      
+        y_hat = (probs > threshold).float()
+        return probs,y_hat
 
     def plotLosses(self, showIt:bool=True, saveTo:str=''):
         epochs = range(len(self.trainLosses))
         fig, ax = plt.subplots(figsize=(15, 10))
         ax.plot(epochs, self.trainLosses, 'r-', label='Training loss')
-        ax.plot(epochs, self.valLosses, 'b-', label='Validation loss')
+        ax.plot(epochs, self.valLosses, 'b--', label='Validation loss')
+        # if self.trackEval:
+        ax.plot(epochs, self.evaluationLosses, 'k-', label='Evaluation loss')  
         ax.set_title('Training loss vs Epochs')
         ax.set_xlabel('Epochs')
         ax.set_ylabel('Loss')
         ax.legend()
         figName = str(self.modelName +'_losses.png')
         if saveTo:
-            plot_Path = saveTo + figName 
-            print(f"--->> Saving Figure to--->>>  {plot_Path}")
+            plot_Path = saveTo
+            self.logger.update_logs({'"--->> Losses vs epochs Figure saved at--->>>':plot_Path})
         else:
-            print(f"--->> Saving Figure to --->>>  {plot_Path}")
             plot_Path = self.saveModelFolder + figName
+            self.logger.update_logs({'"--->> Losses vs epochs Figure saved at--->>>':plot_Path})
+        
         fig.savefig(plot_Path)
-        print(f"--->> Figure Should be Saved to --->>>  {plot_Path}")
         if showIt:
             fig.show()
 
-    def plot_ConfussionMatrix(self,y_val,y_hat, showIt:bool=False, saveTo:str=''):
-            # Compute confusion matrix
-        cm = confusion_matrix(y_val.cpu(),y_hat.cpu())
-        # Create a heatmap
-        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
-        # Add labels to the plot
-        plt.xlabel('Predicted')
-        plt.ylabel('True')
+    def pltTestConfMatrx(self,showIt:bool=False, saveTo:str=''):
+        _,y_hat_test = self.evaluate(X=self.X_test,dataLoader=self.test_loader)
+        return plot_ConfussionMatrix(self.y_test,y_hat_test.cpu(),showIt = showIt, saveTo = saveTo)
+
+    
+
+    def plot_ConfussionMatrix(self,y_real,y_hat, showIt:bool=False, saveTo:str=''):
         figName = str(self.modelName +'_ConfMatrx.png')
+        
         if saveTo:
-            plot_Path = saveTo + "_" +figName 
+            plot_Path = saveTo 
         else:
             plot_Path = self.saveModelFolder + "_" + figName
-        plt.savefig(plot_Path)
-        print(f"--->> Figure Saved to --->>>  {plot_Path}")
-        if showIt:
-            plt.show()
+        plot_ConfussionMatrix(y_real.cpu(),y_hat.cpu(),showIt,plot_Path)
 
     def getModel(self):
         return self.model
@@ -588,7 +448,8 @@ class MLPModelTrainCycle:
 
     def getLosses(self):
         return self.trainLosses
-    
+
+
 #### MODELS List
 class MLP_1(nn.Module):
     def __init__(self, input_size, num_classes:int = 1):
@@ -764,20 +625,18 @@ class MLP_7(nn.Module):
     def forward(self,x):
         return self.model(x)
 
-
-class MLP_8(nn.Module):
+class MLP_FPSigmoid(nn.Module):
+    '''
+    Train a parametriced Sigmoid fucntion with input of the form (x*a+b), where x->sequential putput; <a,b> are learnable parameters. 
+    The goal is to find out if the model expresivity encrease, compared to standard Sigmoid().
+    The model itself is identical to  MLP_6(), with the different sigmoid into the fordward method.
+    '''
     def __init__(self, input_size, num_classes:int = 1):
-        super(MLP_8, self).__init__()
+        super(MLP_FPSigmoid, self).__init__()
         self.model = nn.Sequential(
-            nn.Linear(input_size, input_size*10),
+            nn.Linear(input_size, input_size*5),
             nn.LeakyReLU(),
-            nn.Linear(input_size*10, input_size*10),
-            nn.LeakyReLU(),
-            nn.Linear(input_size*10, input_size*10),
-            nn.LeakyReLU(),
-            nn.Linear(input_size*10, input_size*10),
-            nn.LeakyReLU(),
-            nn.Linear(input_size*10, input_size*5),
+            nn.Linear(input_size*5, input_size*5),
             nn.LeakyReLU(),
             nn.Linear(input_size*5, input_size*2),
             nn.LeakyReLU(),
@@ -786,15 +645,50 @@ class MLP_8(nn.Module):
             nn.Linear(input_size, int(input_size/2)),
             nn.LeakyReLU(),
             nn.Linear(int(input_size/2), num_classes),
-            nn.Sigmoid(),
         )
+        self.a = nn.Parameter(torch.tensor([0.001]))
+        self.b = nn.Parameter(torch.tensor([0.999]))
+
     def get_weights(self):
         return self.weight
     
     def forward(self,x):
-        return self.model(x)
-
-
+        # torch.sigmoid(self.model(x)*self.alpha+self.beta)
+        return torch.sigmoid(self.b * self.model(x) - self.a)
+    
+class TransformerModel_1(nn.Module):
+    def __init__(self, input_size, num_classes:int=1, num_layers:int=2, num_heads:int=1):
+        super(TransformerModel_1, self).__init__()
+        self.transformer_encoder = nn.TransformerEncoder(
+            nn.TransformerEncoderLayer(d_model=input_size, nhead=num_heads),
+            num_layers=num_layers)
+        self.fc = nn.Linear(input_size, num_classes)
+        self.a = nn.Parameter(torch.tensor([0.001]))
+        self.b = nn.Parameter(torch.tensor([0.999]))
+    
+    def forward(self, x):
+        outTr = self.transformer_encoder(x)
+        prob = torch.sigmoid(self.b * self.fc(outTr)- self.a)
+        return prob
+    
+class TransformerMLPHybrid_1(nn.Module):
+    def __init__(self, input_size, num_classes:int=1, num_layers:int=2, num_heads:int=1):
+        super(TransformerMLPHybrid_1, self).__init__()
+        self.transformer_encoder = nn.TransformerEncoder(
+            nn.TransformerEncoderLayer(d_model=input_size, nhead=num_heads),
+            num_layers=num_layers)
+        self.mlp = nn.Sequential(
+            nn.Linear(input_size, input_size),
+            nn.LeakyReLU(),
+            nn.Linear(input_size,num_classes),
+        )
+        self.a = nn.Parameter(torch.tensor([0.001]))
+        self.b = nn.Parameter(torch.tensor([0.999]))
+    
+    def forward(self, x):
+        outTr = self.transformer_encoder(x)
+        outMLP = self.mlp(outTr)
+        return torch.sigmoid(self.b*outMLP - self.a)
 
 ### Helper functions
 def split(x,y,TestPercent = 0.2):
@@ -822,71 +716,7 @@ def listClassCountPercent(array):
     for i in range(len(unique)):
         listClassCountPercent[unique[i]] = str(f"Class_count: {count[i]} (%.4f percent)" %(result[i]))
     return total, listClassCountPercent
-   
-def predictOnFeaturesSet(model, featuresSet):
-    y_hat = model.predict(featuresSet)
-    return y_hat
-
-def validateWithR2(model, x_test, y_test, dominantValue:float, dominantValuePenalty:float, weighted = True):
-    y_hate = model.predict(x_test)
-    if weighted:
-        weights = ms.createWeightVector(y_test,dominantValue,dominantValuePenalty)
-        r2 = metrics.r2_score(y_test, y_hate,sample_weight = weights)
-    else: 
-        r2 = metrics.r2_score(y_test, y_hate)
-    return r2
-
-def computeClassificationMetrics(y_validation,y_hat):
-    '''
-    Ref: https://www.kaggle.com/code/nkitgupta/evaluation-metrics-for-multi-class-classification/notebook
-    '''
-    accScore = metrics.accuracy_score(y_validation, y_hat)
-    macro_averaged_f1 = metrics.f1_score(y_validation, y_hat, average = 'macro') # Better for multiclass
-    micro_averaged_f1 = metrics.f1_score(y_validation, y_hat, average = 'micro')
-    # ROC_AUC_multiClass = roc_auc_score_calculation(y_validation,y_hat)
-    # print('Accuraci_score: ', accScore)  
-    # print('F1_macroAverage: ', macro_averaged_f1)  
-    # print('F1_microAverage: ', micro_averaged_f1)
-    # print('ROC_AUC one_vs_all: ', ROC_AUC_multiClass)
-    return accScore, macro_averaged_f1, micro_averaged_f1 #, ROC_AUC_multiClass
-
-def computeMainErrors(model, x_test, y_test ):
-    y_test  = (np.array(y_test).astype('float')).ravel()
-    y_pred = model.predict(x_test)
-    mae = metrics.mean_absolute_error(y_test, y_pred) 
-    mse= metrics.mean_squared_error(y_test, y_pred)
-    r_mse = np.sqrt(metrics.mean_squared_error(y_test, y_pred)) # Root Mean Squared Error
-    return mae, mse, r_mse
-
-def reportErrors(model, x_test, y_test):
-    mae, mse, r_mse = computeMainErrors(model, x_test, y_test)
-    print('Mean Absolute Error: ',mae )  
-    print('Mean Squared Error: ', mse)  
-    print('Root Mean Squared Error: ',r_mse)
-    
-def investigateFeatureImportance(bestModel, x_train, printed = True):
-    '''
-    DEFAULT Path to save: "./models/rwReg/" 
-    @input: feature matrix
-            bestModel and dateName: created when fitting
-            x_train: Dataset to extract features names
-            printed option: Default = True
-    @return: List of features ordered dessending by importance (pandas DF format). 
-    '''
-    features = x_train.columns
-    featuresInModel= pd.DataFrame({'feature': features,
-                   'importance': bestModel.feature_importances_}).\
-                    sort_values('importance', ascending = False)
-    # clasifierNameExtended = clasifierName + "_featureImportance.csv"     
-    # featuresInModel.to_csv(clasifierNameExtended, index = None)
-    if printed:
-        with pd.option_context('display.max_rows', None,
-                       'display.max_columns', None,
-                       'display.precision', 4,
-                       ):
-            print(featuresInModel)
-    return featuresInModel
-
+ 
 def createSearshGrid(arg):
     param_grid = {
     'n_estimators': eval(arg['n_estimators']), 
@@ -945,26 +775,6 @@ def buildInterval(loops,center):
             if center <= 10 : start = 1  
     return np.arange(start,end,stepSize).astype(int)  
 
-def feature_importance_torch(model, dataloader, device):
-    model.eval()
-    feature_importances = []
-
-    for i, (inputs, labels) in enumerate(dataloader):
-        inputs, labels = inputs.to(device), labels.to(device)
-        outputs = model(inputs)
-        _, preds = torch.max(outputs, 1)
-        acc = accuracy_score(labels.cpu(), preds.cpu())
-
-        for j in range(inputs.shape[1]):  # iterate over each feature
-            inputs_clone = inputs.clone()
-            inputs_clone[:, j] = torch.rand_like(inputs_clone[:, j])  # permute feature values
-            outputs = model(inputs_clone)
-            _, preds = torch.max(outputs, 1)
-            acc_permuted = accuracy_score(labels.cpu(), preds.cpu())
-            feature_importances.append(acc - acc_permuted)  # importance is decrease in accuracy
-
-    return feature_importances
-
 def init_params(model, init_func, *params, **kwargs):
         '''
         Methode to initialize the model's parameters, according a function <init_func>,
@@ -976,7 +786,6 @@ def init_params(model, init_func, *params, **kwargs):
             init_func(p, *params)
 
 ### Metrics ####
-
 def roc_auc_score_calculation(y_validation, y_hat):
         '''
         Compute one-vs-all for every single class in the dataset
@@ -1053,48 +862,381 @@ def pritnAccuracy(y_predic, y_val):
     cm = confusion_matrix(y_predic, y_val) 
     print("Accuracy of MLPClassifier : ", accuracyFromConfusionMatrix(cm)) 
 
-def plot_confusion_matrix(true_labels, predicted_labels):
-    """
-    Function to compute and plot the confusion matrix.
-    Parameters:
-    true_labels (list): List of true labels
-    predicted_labels (list): List of predicted labels
-    """
-    # Compute confusion matrix
-    cm = confusion_matrix(true_labels, predicted_labels)
-    # Create a heatmap
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
-    # Add labels to the plot
-    plt.xlabel('Predicted')
-    plt.ylabel('True')
-    plt.show()
+def plot_ConfussionMatrix(y_val,y_hat,showIt:bool=True, saveTo:str=''):
+    matrix = confusion_matrix(y_val,y_hat)
+    print(f"matrix into plotConfusionMAtrix : {matrix}")
+    # Set up the figure and axis
+    fig, ax = plt.subplots(figsize=(8, 8))
 
-def evaluateModel(validation_dataset_path, labels:str,colsToDrop:list, model = None)-> np.array:
-        threshold = 0.5
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print(f' The device : {device}')
-        X,Y =  ms.importDataSet(validation_dataset_path, labels, colsToDrop)
-        X_val,Y_val = torch.tensor(X.values, dtype=torch.float).to(device),torch.tensor(Y.values, dtype=torch.float)
-        with torch.no_grad():
-            model.eval().to(device)
-            output = model(X_val)
-            y_hat = (output > threshold).int().cpu()
-            accScore, macro_averaged_f1, micro_averaged_f1  = computeClassificationMetrics(Y_val,y_hat)
-            metrics = {'accScore':accScore, 'macro_averaged_f1' : macro_averaged_f1, 
-                'micro_averaged_f1' : micro_averaged_f1}
-        return Y_val,y_hat, metrics
+    # Create the heatmap
+    im = ax.imshow(matrix, cmap= 'Blues')
+   
+    group_names = ['True Neg','False Pos','False Neg','True Pos']
+    group_counts = ["{0:0.0f}".format(value) for value in matrix.flatten()]
+    group_percentages = ["{0:.2%}".format(value) for value in
+                        matrix.flatten()/np.sum(matrix)]
+    labels = [f"{v1}\n{v2}\n{v3}" for v1, v2, v3 in zip(group_names,group_counts,group_percentages)]
+    labels = np.asarray(labels).reshape(2,2)
 
-def inferenceMLP(validation_dataset_path,colsToDrop:list = None, model = None)-> np.array:
-        threshold = 0.5
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print(f' The device : {device}')
-        X  = pd.read_csv(validation_dataset_path, index_col = None)
+    # Add value annotations
+    for i in range(matrix.shape[0]):
+        for j in range(matrix.shape[1]):
+            ax.text(j, i, f"{labels[i, j]}", ha="center", va="center", color="black")
+    
+   # Customize labels and title
+    plt.xlabel("Predicted Labels")
+    plt.ylabel("True Labels")
+    plt.title("Confusion Matrix")
+    plt.xticks([0, 1], ["0", "1"])
+    plt.yticks([0, 1], ["0", "1"])
+
+    if saveTo:
+        fig.savefig(saveTo)
+        print(f"--->> Confusion matrix Saved at --->>>  {saveTo}")
+    if showIt:
+        plt.show()
+    return im
+
+### Evaluation Function:
+
+def evaluateModel(X_DF:pd.DataFrame = None, Y_real_DF:pd.DataFrame = None, model=None, threshold:float=0.5, evalInBathches = True)-> tuple[pd.DataFrame,np.array,np.array]:
+    '''
+    @X: Features in row format.
+    @dataSetPath: dataSetPath to dataset to be evaluated in batches. 
+    @threshold: Threshold to apply when converting probablilities to binary mask. 
+    @Return : y_real,probas,y_hat
+    '''
+    X = torch.tensor(X_DF.values, dtype=torch.float)
+    Y_real = torch.tensor(Y_real_DF.values, dtype=torch.float) 
+    if evalInBathches:
+        data = TensorDataset(X, Y_real)
+        dataLoader = DataLoader(data, batch_size=10, num_workers = 4, shuffle=False, drop_last=False)
+        probas, y_hat = evaluateModel_InBatches(dataLoader,model,threshold)
+        return Y_real, probas, y_hat
+    else:
+        probas, y_hat = evaluateModel_oneShot(X,model,threshold)
+        return Y_real,probas,y_hat 
+
+def evaluateModel_oneShot(X,model,threshold)-> tuple[np.array,np.array]:
+    '''
+    @X: Features in row format.
+    @Y: Labels column vector.
+    @threshold: Threshold to apply when converting probablilities to binary mask. 
+    @Return :  probas, y_hat, metrics (F1-macro-score, F1-micro-score)
+    '''
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    with torch.no_grad():
+        model.eval().to(device)
+        inputs = X.to(device)
+        probas = model(inputs)
+        y_hat = (probas > threshold).float()
+    return probas,y_hat
+
+def evaluateModel_InBatches(data_loader,model,threshold)-> tuple[np.array,np.array]:      
+    '''
+    @X: Features in row format.
+    @Y: Labels column vector.
+    @threshold: Threshold to apply when converting probablilities to binary mask. 
+    @Return : probas, y_hat, metrics (F1-macro-score, F1-micro-score)
+    '''
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    with torch.no_grad():
+        probs = torch.tensor([]).to(device)
+        model.eval().to(device)
+        for inputs, _ in data_loader:
+            inputs = inputs.to(device)
+            log_probs = model(inputs)
+            probs = torch.cat((probs,log_probs)) #.squeeze()                     
+    y_hat = (probs > threshold).float()
+    return probs,y_hat
+       
+### Inference Function
+def inference(model,inferenceDataSet, colsToDrop:list = None,threshold:float=0.5,inferInBatches = False)-> np.array:
+        X = pd.read_csv(inferenceDataSet, index_col = None)
         if colsToDrop is not None:
             X.drop(colsToDrop, axis=1, inplace = True)
-            print(f'Features to evaluate {X.columns}')
-        X_val = torch.tensor(X.values, dtype=torch.float).to(device)
-        with torch.no_grad():
+            print(f'Features for Inference {X.columns}')
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+        X_val = torch.tensor(X.values, dtype=torch.float)
+        if inferInBatches:
+            infer_Dataset = TensorDataset(X_val)
+            # print(infer_Dataset)
+            infer_loader = DataLoader(infer_Dataset, batch_size=10,shuffle=False)
+            # print(infer_loader)
+            probs = torch.tensor([]).to(device)
             model.eval().to(device)
-            output = model(X_val)
-            y_hat = (output > threshold).int().cpu()
-        return y_hat
+            with torch.no_grad():
+                for inputs in infer_loader:
+                    inputs_Tsr = torch.tensor(np.array(inputs), dtype=torch.float)
+                    inputs_Tsr = inputs_Tsr.to(device)
+                    log_probs = model(inputs_Tsr)
+                    probs = torch.cat((probs,log_probs.squeeze()))  
+            y_hat = (probs > threshold).float().cpu()    
+            return y_hat,probs.cpu()
+        else:
+            with torch.no_grad():
+                model.eval().to(device)
+                inputs = X_val.to(device)
+                probs = model(inputs)
+                y_hat = (probs > threshold).float().cpu()
+            return y_hat,probs.cpu()
+
+### In test zone. Not ready yet. 
+class getEstimatorMetric():
+    def __init__(self, cfg:DictConfig):
+        local = cfg.local
+        pathDataset = local + cfg['pathDataset']
+        self.model = local + cfg.estimator
+        self.targetColName = cfg.targetColName
+        self.x_validation, self.y_validation = ms.importDataSet(self.pathDataset, self.targetColName)
+        pass
+
+    def classifierMetric(self):
+        classifier = ms.loadModel(self.model)
+        y_hat = classifier.predict(self.x_validation)
+        accScore = metrics.accuracy_score(self.y_validation, y_hat)
+        macro_averaged_f1 = metrics.f1_score(self.y_validation, y_hat, average = 'macro') # Better for multiclass
+        micro_averaged_f1 = metrics.f1_score(self.y_validation, y_hat, average = 'micro')
+        ROC_AUC_multiClass = roc_auc_score_calculation(self.y_validation,y_hat)
+        metric = {}
+        metric['accScore'] = accScore
+        metric['macro_averaged_f1'] = macro_averaged_f1
+        metric['micro_averaged_f1'] = micro_averaged_f1
+        metric['ROC_AUC_multiClass'] = ROC_AUC_multiClass
+        return metric
+
+    def regressorMetric(self):
+        regressor = ms.loadModel(self.model)
+        r2_validation = validateWithR2(regressor,self.x_validation,self.y_validation,0,0.1, weighted = False)
+        return r2_validation
+            
+    # Defining a function to decide which function to call
+    def metric(self, modelType: str):
+        method = self.switch(self,modelType)
+        if method != False:
+            return method
+        else: 
+            return print("Invalide model type. Vefify configurations")
+
+    def switch(self, modelType:str):
+        dict={
+            'regressor': self.regressorMetric(self),
+            'classifier': self.classifierMetric(self),
+        }
+        return dict.get(modelType, False)
+
+def computeMetric(cfg: DictConfig):
+    estimatorMetric = getEstimatorMetric(cfg)
+    metricResults = estimatorMetric.metric(cfg.modelType)
+    print(metricResults)
+    return metricResults
+ 
+######################################
+class CustomLoss(nn.Module):
+    def __init__(self):
+        super(CustomLoss, self).__init__()
+
+    def forward(self, predicted, target):
+        """
+        Calculates the mean absolute error (MAE) between predicted and target tensors.
+        Args:
+            predicted (torch.Tensor): Predicted values.
+            target (torch.Tensor): Ground truth values.
+        Returns:
+            torch.Tensor: Mean absolute error.
+        """
+        loss = torch.abs(predicted - target).mean()
+        return loss
+
+##### Explore best Sigmoid threshold
+##define thresholds
+
+def probs_to_labels(pos_probs, threshold):
+    return (pos_probs >= threshold).float()
+
+def exploreBestSigmoidThreshold_F1Macro(y_validation,probs)-> float:
+    print('----  Best Macro Average values  -----')
+    thresholds = np.arange(0, 1, 0.01)
+    macro = [metrics.f1_score(y_validation, probs_to_labels(probs,t), average = 'macro') for t in thresholds]
+    ix = np.argmax(macro)
+    score = metrics.f1_score(y_validation, probs_to_labels(probs,thresholds[ix]), average = 'micro')
+    # print('Threshold=%.3f, F1_Macro=%.4f , score=%.4f' % (thresholds[ix], macro[ix],score))
+    return thresholds[ix],macro[ix], score
+
+def exploreBestSigmoidThreshold_F1Score(y_validation,probs):
+    thresholds = np.arange(0, 1, 0.01)
+    macro = [metrics.f1_score(y_validation, probs_to_labels(probs,t), average = 'macro') for t in thresholds]
+    scores = [metrics.f1_score(y_validation, probs_to_labels(probs,t), average = 'micro') for t in thresholds]
+    ix = np.argmax(scores)
+    # print('Threshold=%.3f, F1 Score=%.5f' % (thresholds[ix], scores[ix]))
+    return thresholds[ix],macro[ix],scores[ix]
+
+
+##
+        ###################################################
+        ####  METRICS And Feature importance methods  #####
+        ###################################################
+
+#### Explore feauture importance PERMUTATION  method  ####
+def permutation_importance(datasetPath, labels, model, metric, colsToDrop=None, inBatches:bool = True):
+    """
+    @Apply to all kind of models.
+    
+    Calcula la importancia de las características utilizando la técnica de permutación.
+    Args:
+    - X: numpy array. Conjunto de datos de características.
+    - y_true: numpy array. Vector de verdad de terreno.
+    - model: objeto de modelo entrenado.
+    - metric: función de métrica para evaluar el modelo. Debe tomar dos argumentos: y_true, y_pred.
+    Returns:
+    - feature_importances: lista de tuplas (nombre de característica, importancia)
+    - feature_importance_percentages: lista de tuplas (nombre de característica, porcentaje de importancia)
+    """
+    X, y_true = ms.importDataSet(datasetPath, labels, colsToDrop)
+    # Predicciones con el modelo original
+    _,_, y_hat = evaluateModel(X, y_true, model, evalInBathches=inBatches)
+   
+       #original score
+    orig_score = metric(y_true, y_hat.cpu())    
+    # Inicializar listas para almacenar importancias y porcentajes
+    feature_importances =[]
+    feature_importance_percentages = []
+
+    #Calcular importancia de características
+    for i in range(0,X.shape[1]):
+        # Copiar los datos originales para preservarlos
+        X_permuted = X.copy()
+        np.random.shuffle(X_permuted.values[:,i])
+        # X_permuted_tensor = torch.tensor(X_permuted, dtype=torch.float).to(device)
+        # Permutar los valores de una característica
+        # Calcular predicciones con la característica permutada
+        _,_, y_pred_permuted = evaluateModel(X_permuted, y_true, model, evalInBathches=inBatches)
+        # Calcular la métrica con la característica permutada
+        permuted_score = metric(y_true, y_pred_permuted.cpu())
+        # Calcular la importancia de la característica
+        feature_importance = orig_score - permuted_score
+        # Agregar la importancia a la lista
+        feature_importances.append((i, feature_importance))
+    
+    # Ordenar características por importancia
+    feature_importances.sort(key=lambda x: x[1], reverse=True)
+    
+    # Calcular porcentajes de importancia
+    total_importance = sum(importance for _, importance in feature_importances)
+    for idx, importance in feature_importances:
+        feature_importance_percentages.append((idx, (importance / total_importance) * 100))
+    
+    # Imprime las características ordenadas por importancia y sus porcentajes de importancia
+    for idx, importance in feature_importances:
+        print(f"Feature {idx}: Importance {importance}")
+
+    for idx, percentage in feature_importance_percentages:
+        print(f"Feature {idx}: Importance Percentage {percentage}%")
+        
+    return feature_importances, feature_importance_percentages
+
+#### Explore feauture importance from random forest models  ####
+def investigateFeatureImportance(bestModel, x_train, printed = True)-> pd.DataFrame:
+    '''
+    @Apply to random forest variants. 
+    DEFAULT Path to save: "./models/rwReg/" 
+    @input: feature matrix
+            bestModel and dateName: created when fitting
+            x_train: Dataset to extract features names
+            printed option: Default = True
+    @return: List of features ordered dessending by importance (pandas DF format). 
+    '''
+    features = x_train.columns
+    featuresInModel= pd.DataFrame({'feature': features,
+                   'importance': bestModel.feature_importances_}).\
+                    sort_values('importance', ascending = False)
+    # clasifierNameExtended = clasifierName + "_featureImportance.csv"     
+    # featuresInModel.to_csv(clasifierNameExtended, index = None)
+    if printed:
+        with pd.option_context('display.max_rows', None,
+                       'display.max_columns', None,
+                       'display.precision', 4,
+                       ):
+            print(featuresInModel)
+    return featuresInModel
+
+#### Explore feauture importance for torch models  ####
+def feature_importance_torch(model, dataloader, device):
+    model.eval()
+    feature_importances = []
+
+    for i, (inputs, labels) in enumerate(dataloader):
+        inputs, labels = inputs.to(device), labels.to(device)
+        outputs = model(inputs)
+        _, preds = torch.max(outputs, 1)
+        acc = accuracy_score(labels.cpu(), preds.cpu())
+
+        for j in range(inputs.shape[1]):  # iterate over each feature
+            inputs_clone = inputs.clone()
+            inputs_clone[:, j] = torch.rand_like(inputs_clone[:, j])  # permute feature values
+            outputs = model(inputs_clone)
+            _, preds = torch.max(outputs, 1)
+            acc_permuted = accuracy_score(labels.cpu(), preds.cpu())
+            feature_importances.append(acc - acc_permuted)  # importance is decrease in accuracy
+    return feature_importances
+
+####  METRICS  #####
+def intersection_over_union(y_true, y_pred):
+    """
+    Calcula la intersección sobre unión (IoU) para evaluar la clasificación binaria.
+    """
+    tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
+    intersection = tp
+    union = tp + fp + fn
+    return intersection / union
+
+def F1_Macro_Average(y_real, y_predicted):
+    return metrics.f1_score(y_real, y_predicted, average = 'macro') # Better for multiclass
+
+def F1_Micro_Average(y_real, y_predicted):
+    return metrics.f1_score(y_real, y_predicted, average = 'micro') # Better for multiclass
+
+def validateWithR2(model, x_test, y_test, dominantValue:float, dominantValuePenalty:float, weighted = True):
+    y_hate = model.predict(x_test)
+    if weighted:
+        weights = ms.createWeightVector(y_test,dominantValue,dominantValuePenalty)
+        r2 = metrics.r2_score(y_test, y_hate,sample_weight = weights)
+    else: 
+        r2 = metrics.r2_score(y_test, y_hate)
+    return r2
+
+def computeClassificationMetrics(y_real,y_predicted)->dict:
+    '''
+    Ref: https://www.kaggle.com/code/nkitgupta/evaluation-metrics-for-multi-class-classification/notebook
+    '''
+   #accScore = metrics.accuracy_score(y_real, y_predicted)
+    macro_averaged_f1 = F1_Macro_Average(y_real, y_predicted) # Better for multiclassy_real, y_predicted, average = 'macro') # Better for multiclass
+    micro_averaged_f1 = F1_Micro_Average(y_real, y_predicted)
+    IoU = intersection_over_union(y_real, y_predicted)
+    # ROC_AUC_multiClass = roc_auc_score_calculation(y_validation,y_hat)
+    # print('Accuraci_score: ', accScore)  
+    # print('F1_macroAverage: ', macro_averaged_f1)  
+    # print('F1_microAverage: ', micro_averaged_f1)
+    # print('ROC_AUC one_vs_all: ', ROC_AUC_multiClass)
+    metric = {'macro_averaged_f1' : round(macro_averaged_f1,4),'micro_averaged_f1' : round(micro_averaged_f1,4),'IoU' : round(IoU ,4) }   
+    return metric
+
+def computeMainErrors(model, x_test, y_test ):
+    y_test  = (np.array(y_test).astype('float')).ravel() 
+    y_pred = model.predict(x_test)
+    mae = metrics.mean_absolute_error(y_test, y_pred) 
+    mse= metrics.mean_squared_error(y_test, y_pred)
+    r_mse = np.sqrt(mse) # Root Mean Squared Error
+    return mae, mse, r_mse
+
+def reportErrors(model, x_test, y_test):
+    '''
+    Print the outputs os computeMainError function. 
+    '''
+    mae, mse, r_mse = computeMainErrors(model, x_test, y_test)
+    print('Mean Absolute Error: ',mae )  
+    print('Mean Squared Error: ', mse)  
+    print('Root Mean Squared Error: ',r_mse)
+    
+
